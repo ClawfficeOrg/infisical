@@ -149,3 +149,20 @@ templates/
 └── opencode/                # OpenCode integration
     └── base.yaml
 ```
+
+---
+
+> **Naming note:** We considered several names for this feature.
+> All of them had problems.
+>
+> | Acronym | Expansion | Verdict |
+> |---------|-----------|---------|
+> | CSS | Cascading Secret Sheets | Already taken — and no, we're not handrolling this |
+> | STI | Secret Template Inheritance | ✅ Very much so |
+> | STD | Secret Template Descent | ✅ Even worse |
+> | SSS | Secret Sheet Stacking | Sounds like a library nobody visits |
+> | SRP | Secret Reference Propagation | Sounds like a religion nobody joins |
+> | SHI | Secret Hierarchical Inheritance | ...let's move on |
+>
+> So it's just **"Secret Templates"**. Clean, no acronym baggage,
+> describes exactly what it does.
