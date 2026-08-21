@@ -169,11 +169,94 @@ secrets:
     path: "/agents/kitt"
 ```
 
-## Open Questions
+## Design Decisions
 
-1. Should folder scopes be defined on the identity-project membership
-   (as proposed) or as a separate "identity-scope" entity?
-2. Should groups inherit folder scopes (a group-level scope applies
-   to all identities in the group)?
-3. Should temporary/scoped access (time-limited folder access) be
-   supported from day one?
+### 1. Scope ownership: separate entity ✅
+
+Folder scopes should be a **separate `IdentityFolderScope` entity**,
+not embedded in the identity-project membership.  Reasons:
+
+- **Multiple scopes per identity** — an identity might need 5+ folder
+  rules (shared read, own folder readwrite, integration read, etc.).
+  Embedding them bloats the membership row.
+- **Audit trail** — separate entity gets its own `createdAt`,
+  `updatedAt`, `createdBy` for tracking who granted which scope.
+- **Reusability** — scopes can be templated.  "Kitt's standard scope"
+  is a reusable definition applied to multiple projects.
+- **Easier enforcement** — the secret-service DAL queries
+  `IdentityFolderScope.find({ identityId, projectId, environment })`
+  and intersects with the requested path.  No need to parse embedded
+  arrays.
+
+```typescript
+// backend/src/db/schemas/identity-folder-scope.ts (new)
+{
+  id: string;                    // PK
+  identityId: string;            // FK → Identity
+  projectId: string;             // FK → Project
+  environment: string;           // "prod", "staging", etc.
+  secretPath: string;            // glob: "/shared/*", "/agents/kitt/**"
+  permission: "read" | "readwrite";
+  createdBy: string;             // actor who granted this scope
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+### 2. Group inheritance ✅
+
+Groups should **inherit folder scopes**.  When a group has a scope,
+every identity in that group inherits it (subject to identity-level
+overrides).
+
+**Resolution order** (most specific wins):
+
+1. **Identity-level scope** — directly assigned to the identity
+   via `IdentityFolderScope`.  Highest priority.
+2. **Group-level scope** — assigned to a group the identity belongs
+   to.  Merged across all groups; if two groups grant different
+   permissions on the same path, the **most permissive** wins
+   (readwrite > read).
+3. **Project default** — if no scopes exist for an identity (neither
+   direct nor group-inherited), the identity gets full project access
+   (legacy behavior, zero breaking change).
+
+**Example:**
+
+```
+Group "hermes-agents":
+  - /shared/* → read
+  - /shared/config/* → readwrite
+
+Identity "kitt" (member of "hermes-agents"):
+  - /agents/kitt/** → readwrite    (identity-level)
+  - /shared/* → read               (inherited from group)
+  - /shared/config/* → readwrite   (inherited from group)
+```
+
+```typescript
+// backend/src/db/schemas/group-folder-scope.ts (new)
+{
+  id: string;
+  groupId: string;               // FK → Group
+  projectId: string;
+  environment: string;
+  secretPath: string;
+  permission: "read" | "readwrite";
+  createdBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+**UI:** In the Groups page → Project Memberships → "Folder Permissions"
+tab.  In the Identity page → "Inherited from groups" section showing
+what scopes come from group membership (with a link to the source
+group).
+
+### 3. Time-limited access: deferred ❌
+
+Not in scope for the initial implementation.  The existing
+`TemporaryPermissionMode` infrastructure in the codebase can be
+extended later if needed.  For now, all folder scopes are permanent
+until manually revoked.
