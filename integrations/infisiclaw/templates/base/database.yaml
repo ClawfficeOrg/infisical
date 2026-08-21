@@ -1,0 +1,24 @@
+name: database
+description: "Database connection strings"
+version: 1
+
+secrets:
+  - name: DATABASE_URL
+    placeholder: "postgresql://user:pass@host:5432/dbname"
+    description: "Primary PostgreSQL connection string"
+    group: database
+
+  - name: REDIS_URL
+    placeholder: "redis://host:6379/0"
+    description: "Redis connection string — caching, queues"
+    group: database
+
+  - name: DATABASE_POOL_SIZE
+    value: "10"
+    description: "Max connection pool size"
+    group: database
+
+  - name: DATABASE_SSL_MODE
+    value: "require"
+    description: "SSL mode for database connections (disable/prefer/require)"
+    group: database

@@ -1,0 +1,54 @@
+name: platform-tokens
+description: "Messaging and collaboration platform tokens"
+version: 1
+
+secrets:
+  - name: WHATSAPP_ACCESS_TOKEN
+    placeholder: ""
+    description: "WhatsApp Business API token"
+    group: platform
+
+  - name: WHATSAPP_PHONE_NUMBER_ID
+    placeholder: ""
+    description: "WhatsApp phone number ID"
+    group: platform
+
+  - name: MATRIX_ACCESS_TOKEN
+    placeholder: ""
+    description: "Matrix homeserver access token"
+    group: platform
+
+  - name: SLACK_SIGNING_SECRET
+    placeholder: ""
+    description: "Slack request signing secret"
+    group: platform
+
+  - name: TEAMS_APP_ID
+    placeholder: ""
+    description: "Microsoft Teams application ID"
+    group: platform
+
+  - name: TEAMS_APP_SECRET
+    placeholder: ""
+    description: "Microsoft Teams application secret"
+    group: platform
+
+  - name: EMAIL_SMTP_HOST
+    value: "smtp.gmail.com"
+    description: "SMTP server hostname"
+    group: email
+
+  - name: EMAIL_SMTP_PORT
+    value: "587"
+    description: "SMTP server port"
+    group: email
+
+  - name: EMAIL_USERNAME
+    placeholder: ""
+    description: "SMTP auth username (usually email address)"
+    group: email
+
+  - name: EMAIL_PASSWORD
+    placeholder: ""
+    description: "SMTP auth password or app-specific password"
+    group: email

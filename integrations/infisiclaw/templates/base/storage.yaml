@@ -1,0 +1,34 @@
+name: storage
+description: "Object storage and file system config"
+version: 1
+
+secrets:
+  - name: S3_BUCKET
+    placeholder: "my-bucket"
+    description: "S3 bucket name"
+    group: storage
+
+  - name: S3_REGION
+    value: "us-east-1"
+    description: "S3 region"
+    group: storage
+
+  - name: S3_ACCESS_KEY_ID
+    placeholder: ""
+    description: "S3 / AWS access key ID"
+    group: storage
+
+  - name: S3_SECRET_ACCESS_KEY
+    placeholder: ""
+    description: "S3 / AWS secret access key"
+    group: storage
+
+  - name: STORAGE_BACKEND
+    value: "local"
+    description: "Storage backend: local, s3, gcs, azure"
+    group: storage
+
+  - name: UPLOAD_MAX_SIZE_MB
+    value: "50"
+    description: "Max file upload size in MB"
+    group: storage

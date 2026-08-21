@@ -1,0 +1,34 @@
+name: auth-tokens
+description: "Authentication and platform tokens"
+version: 1
+
+secrets:
+  - name: GITHUB_PERSONAL_ACCESS_TOKEN
+    placeholder: "ghp_..."
+    description: "GitHub PAT — repo access, API calls"
+    group: auth
+
+  - name: DISCORD_BOT_TOKEN
+    placeholder: ""
+    description: "Discord bot token — gateway messaging"
+    group: platform
+
+  - name: DISCORD_APP_ID
+    placeholder: ""
+    description: "Discord application ID"
+    group: platform
+
+  - name: TELEGRAM_BOT_TOKEN
+    placeholder: ""
+    description: "Telegram bot token — gateway messaging"
+    group: platform
+
+  - name: SLACK_BOT_TOKEN
+    placeholder: "xoxb-..."
+    description: "Slack bot token — workspace messaging"
+    group: platform
+
+  - name: SLACK_APP_TOKEN
+    placeholder: "xapp-..."
+    description: "Slack app-level token — socket mode"
+    group: platform

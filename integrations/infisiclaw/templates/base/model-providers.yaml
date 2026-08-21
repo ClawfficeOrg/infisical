@@ -1,0 +1,44 @@
+name: model-providers
+description: "Common LLM model provider API keys"
+version: 1
+
+secrets:
+  - name: OPENROUTER_API_KEY
+    placeholder: "sk-or-v1-..."
+    description: "OpenRouter — access to 200+ models via a single key"
+    group: model-providers
+
+  - name: ANTHROPIC_API_KEY
+    placeholder: "sk-ant-..."
+    description: "Anthropic direct — Claude models"
+    group: model-providers
+
+  - name: OPENAI_API_KEY
+    placeholder: "sk-..."
+    description: "OpenAI direct — GPT/o-series models"
+    group: model-providers
+
+  - name: GOOGLE_API_KEY
+    placeholder: "AIza..."
+    description: "Google AI / Gemini — Gemini models"
+    group: model-providers
+
+  - name: DEEPSEEK_API_KEY
+    placeholder: "sk-..."
+    description: "DeepSeek — DeepSeek-V3/R1 models"
+    group: model-providers
+
+  - name: XAI_API_KEY
+    placeholder: "xai-..."
+    description: "xAI — Grok models"
+    group: model-providers
+
+  - name: MISTRAL_API_KEY
+    placeholder: ""
+    description: "Mistral — Mistral/Le Chat models + Voxtral STT"
+    group: model-providers
+
+  - name: HF_TOKEN
+    placeholder: "hf_..."
+    description: "Hugging Face — model hub access"
+    group: model-providers

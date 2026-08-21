@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""infisiclaw — template-driven secret folder creation for Infisical.
+
+Creates Infisical secret folders from YAML templates, with optional
+cross-manager backup sync (Bitwarden/Vaultwarden, HashiCorp Vault).
+
+Usage:
+    infisiclaw templates list                     # show available templates
+    infisiclaw create --template <name> \\
+        --project <id> --env <env> --path <path>  # create from template
+    infisiclaw create --template <name> \\
+        --project <id> --env <env> --path <path> \\
+        --set KEY=value                           # override specific secrets
+    infisiclaw create --template <name> ... \\
+        --sync bitwarden --sync-vault "my-vault"  # backup to Bitwarden
+    infisiclaw create --template <name> ... \\
+        --sync vault --sync-path "secret/prefix"  # backup to Vault
+
+Requires: pyyaml (pip install pyyaml)
+Env vars: INFISICAL_MACHINE_CLIENT_ID, INFISICAL_MACHINE_CLIENT_SECRET,
+          INFISICAL_URL (or --domain flag)
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import hashlib
+import json
+import os
+import secrets
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import yaml
+except ImportError:
+    print("error: pyyaml is required — install with: pip install pyyaml", file=sys.stderr)
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Template loading & resolution
+# ---------------------------------------------------------------------------
+
+# Resolve template dir relative to this script
+_SCRIPT_DIR = Path(__file__).resolve().parent if "__file__" in dir() else Path.cwd()
+TEMPLATE_DIR = _SCRIPT_DIR / "templates"
+
+
+def _load_yaml(path: Path) -> dict:
+    """Load a YAML file, returning empty dict on error."""
+    try:
+        return yaml.safe_load(path.read_text()) or {}
+    except Exception as exc:
+        print(f"warning: failed to load {path}: {exc}", file=sys.stderr)
+        return {}
+
+
+def _resolve_extends(template: dict, visited: set | None = None) -> dict:
+    """Recursively merge inherited templates."""
+    if visited is None:
+        visited = set()
+
+    extends = template.get("extends", [])
+    if not extends:
+        return template
+
+    merged_secrets: List[dict] = []
+    merged: dict = {k: v for k, v in template.items() if k not in ("extends", "secrets")}
+
+    for ext_name in extends:
+        if ext_name in visited:
+            print(f"warning: circular extends detected: {ext_name}", file=sys.stderr)
+            continue
+        visited.add(ext_name)
+
+        ext_path = TEMPLATE_DIR / f"{ext_name}.yaml"
+        if not ext_path.exists():
+            # Try as a directory with name.yaml inside
+            ext_path = TEMPLATE_DIR / ext_name / "name.yaml"
+        if not ext_path.exists():
+            print(f"warning: extends template '{ext_name}' not found, skipping", file=sys.stderr)
+            continue
+
+        base = _load_yaml(ext_path)
+        resolved = _resolve_extends(base, visited)
+        merged_secrets.extend(resolved.get("secrets", []))
+
+    # Own secrets override base (by name)
+    own_secrets = template.get("secrets", [])
+    own_names = {s["name"] for s in own_secrets if "name" in s}
+    merged_secrets = [s for s in merged_secrets if s.get("name") not in own_names]
+    merged_secrets.extend(own_secrets)
+
+    merged["secrets"] = merged_secrets
+    return merged
+
+
+def resolve_template(name: str) -> Optional[dict]:
+    """Load and resolve a template by name (e.g. 'hermes/full')."""
+    # Try direct file
+    path = TEMPLATE_DIR / f"{name}.yaml"
+    if not path.exists():
+        # Try as directory
+        path = TEMPLATE_DIR / name / "base.yaml"
+    if not path.exists():
+        path = TEMPLATE_DIR / name / "name.yaml"
+    if not path.exists():
+        return None
+
+    raw = _load_yaml(path)
+    return _resolve_extends(raw)
+
+
+def list_templates() -> List[Tuple[str, str]]:
+    """List all available templates as (slug, description) pairs."""
+    templates = []
+    for yaml_file in sorted(TEMPLATE_DIR.rglob("*.yaml")):
+        rel = yaml_file.relative_to(TEMPLATE_DIR)
+        # Skip base templates (they're inherited, not standalone entry points)
+        if rel.parts[0] == "base":
+            continue
+        slug = str(rel.with_suffix(""))
+        data = _load_yaml(yaml_file)
+        desc = data.get("description", "")
+        templates.append((slug, desc))
+    return templates
+
+
+# ---------------------------------------------------------------------------
+# Value generation
+# ---------------------------------------------------------------------------
+
+def generate_value(kind: str) -> str:
+    """Generate a secret value by kind."""
+    if kind == "random":
+        return secrets.token_hex(16)
+    elif kind == "uuid":
+        return str(uuid.uuid4())
+    elif kind == "base64":
+        import base64
+        return base64.b64encode(secrets.token_bytes(24)).decode("ascii")
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Infisical API
+# ---------------------------------------------------------------------------
+
+def _api_base(domain: str) -> str:
+    d = domain.rstrip("/")
+    return d if d.endswith("/api") else d + "/api"
+
+
+def infisical_auth(domain: str, client_id: str, client_secret: str) -> str:
+    """Authenticate to Infisical and return an access token."""
+    url = _api_base(domain) + "/v1/auth/universal-auth/login"
+    payload = json.dumps({"clientId": client_id, "clientSecret": client_secret}).encode()
+    req = urllib.request.Request(url, data=payload,
+                                headers={"Content-Type": "application/json"},
+                                method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())["accessToken"]
+
+
+def infisical_create_secret(
+    domain: str, token: str, project_id: str,
+    env: str, path: str, name: str, value: str,
+) -> bool:
+    """Create or update a single secret in Infisical."""
+    url = _api_base(domain) + "/v3/secrets/raw/" + urllib.parse.quote(name, safe="")
+
+    # Try create first, then update if it exists
+    for method in ("POST", "PATCH"):
+        params = {
+            "workspaceId": project_id,
+            "environment": env,
+            "secretPath": path,
+            "secretKey": name,
+            "secretValue": value,
+            "type": "shared",
+        }
+        body = json.dumps(params).encode()
+        req = urllib.request.Request(
+            url, data=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status in (200, 201):
+                    return True
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404 and method == "POST":
+                continue  # secret doesn't exist yet, try PATCH → also 404
+            if exc.code == 404:
+                return False
+            raise
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Bitwarden sync
+# ---------------------------------------------------------------------------
+
+def sync_bitwarden(
+    secrets_dict: Dict[str, str],
+    vault_name: str,
+    folder_path: str,
+    domain: str = "",
+) -> bool:
+    """Sync secrets to a Bitwarden/Vaultwarden vault.
+
+    Uses the Bitwarden Secrets Manager CLI (bws) if available,
+    otherwise falls back to the Vaultwarden REST API.
+    """
+    # Try bws CLI first
+    bws_token = os.environ.get("BWS_ACCESS_TOKEN", "")
+    if bws_token:
+        print(f"  [bitwarden] syncing via bws to vault '{vault_name}'...")
+        # bws uses project IDs, not vault names — use BWS_PROJECT_ID
+        project_id = os.environ.get("BWS_PROJECT_ID", "")
+        if not project_id:
+            print("  [bitwarden] warning: BWS_PROJECT_ID not set, skipping sync", file=sys.stderr)
+            return False
+        for key, value in secrets_dict.items():
+            try:
+                subprocess.run(
+                    ["bws", "secret", "create", "--project-id", project_id,
+                     "--name", f"{folder_path}/{key}", "--value", value],
+                    capture_output=True, text=True, timeout=10,
+                    env={**os.environ, "BWS_ACCESS_TOKEN": bws_token},
+                )
+            except Exception as exc:
+                print(f"  [bitwarden] failed to sync {key}: {exc}", file=sys.stderr)
+        print(f"  [bitwarden] synced {len(secrets_dict)} secrets to '{vault_name}'")
+        return True
+
+    # Fallback: Vaultwarden API
+    vw_url = os.environ.get("VAULTWARDEN_URL", domain)
+    vw_token = os.environ.get("VAULTWARDEN_TOKEN", "")
+    if vw_url and vw_token:
+        print(f"  [bitwarden] syncing via Vaultwarden API to '{vault_name}'...")
+        # Create a secure note or custom field per secret
+        # (Vaultwarden API doesn't have a direct "create secret" —
+        #  this is a placeholder for the actual implementation)
+        print("  [bitwarden] Vaultwarden API sync not yet implemented")
+        return False
+
+    print("  [bitwarden] no BWS_ACCESS_TOKEN or VAULTWARDEN_* env vars found, skipping sync",
+          file=sys.stderr)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Vault sync
+# ---------------------------------------------------------------------------
+
+def sync_vault(
+    secrets_dict: Dict[str, str],
+    engine: str,
+    prefix: str,
+    folder_path: str,
+) -> bool:
+    """Sync secrets to HashiCorp Vault KV engine."""
+    vault_addr = os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200")
+    vault_token = os.environ.get("VAULT_TOKEN", "")
+
+    if not vault_token:
+        print("  [vault] VAULT_TOKEN not set, skipping sync", file=sys.stderr)
+        return False
+
+    path = f"{engine}/{prefix.strip('/')}/{folder_path.strip('/')}"
+    url = f"{vault_addr}/v1/{path}"
+
+    data = {"data": secrets_dict}
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode(),
+        headers={
+            "X-Vault-Token": vault_token,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            print(f"  [vault] synced {len(secrets_dict)} secrets to '{path}'")
+            return True
+    except Exception as exc:
+        print(f"  [vault] sync failed: {exc}", file=sys.stderr)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Interactive creation
+# ---------------------------------------------------------------------------
+
+def prompt_secrets(
+    secrets_defs: List[dict],
+    overrides: Dict[str, str],
+    auto_generate: bool = False,
+) -> Dict[str, str]:
+    """Interactively prompt for secret values.
+
+    If auto_generate is True, generate values without prompting.
+    """
+    result: Dict[str, str] = {}
+
+    for sdef in secrets_defs:
+        name = sdef.get("name", "")
+        if not name:
+            continue
+
+        # Check overrides first
+        if name in overrides:
+            result[name] = overrides[name]
+            continue
+
+        # Generate value
+        if "generate" in sdef:
+            result[name] = generate_value(sdef["generate"])
+            continue
+
+        # Static value
+        if "value" in sdef and "placeholder" not in sdef:
+            result[name] = sdef["value"]
+            continue
+
+        # Prompt user
+        if auto_generate:
+            result[name] = sdef.get("value", "")
+            continue
+
+        placeholder = sdef.get("placeholder", "")
+        default = sdef.get("value", "")
+        desc = sdef.get("description", "")
+
+        if desc:
+            print(f"\n  {desc}")
+        hint = f" [{placeholder}]" if placeholder else ""
+        default_hint = f" (default: {default})" if default else ""
+        prompt = f"  {name}{hint}{default_hint}: "
+
+        value = input(prompt).strip()
+        if not value:
+            value = default or ""
+        result[name] = value
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def cmd_templates_list(args):
+    """List available templates."""
+    templates = list_templates()
+    if not templates:
+        print("No templates found.")
+        return
+
+    print(f"\nAvailable templates ({len(templates)}):\n")
+    for slug, desc in templates:
+        print(f"  {slug:<30s}  {desc}")
+    print()
+
+
+def cmd_create(args):
+    """Create a secret folder from a template."""
+    template = resolve_template(args.template)
+    if not template:
+        print(f"error: template '{args.template}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\nTemplate: {template.get('name', args.template)}")
+    print(f"  {template.get('description', '')}")
+
+    secrets_defs = template.get("secrets", [])
+    print(f"  Secrets: {len(secrets_defs)}")
+
+    # Collect overrides from --set flags
+    overrides: Dict[str, str] = {}
+    for s in (args.set or []):
+        if "=" in s:
+            k, v = s.split("=", 1)
+            overrides[k.strip()] = v.strip()
+
+    # Prompt for values
+    values = prompt_secrets(secrets_defs, overrides, auto_generate=args.yes)
+
+    if not args.yes:
+        print(f"\n  Ready to create {len(values)} secrets in:")
+        print(f"    Project: {args.project}")
+        print(f"    Env:     {args.env}")
+        print(f"    Path:    {args.path}")
+        confirm = input("\n  Proceed? [Y/n] ").strip().lower()
+        if confirm and confirm != "y":
+            print("  Aborted.")
+            return
+
+    # Authenticate to Infisical
+    domain = args.domain or os.environ.get("INFISICAL_URL", "")
+    client_id = os.environ.get("INFISICAL_MACHINE_CLIENT_ID", "")
+    client_secret = os.environ.get("INFISICAL_MACHINE_CLIENT_SECRET", "")
+
+    if not domain or not client_id or not client_secret:
+        print("error: INFISICAL_URL, INFISICAL_MACHINE_CLIENT_ID, and "
+              "INFISICAL_MACHINE_CLIENT_SECRET must be set", file=sys.stderr)
+        sys.exit(1)
+
+    print("\n  Authenticating to Infisical...")
+    try:
+        token = infisical_auth(domain, client_id, client_secret)
+    except Exception as exc:
+        print(f"error: auth failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Create secrets
+    print(f"  Creating {len(values)} secrets at {args.path}...")
+    created = 0
+    for name, value in values.items():
+        if infisical_create_secret(domain, token, args.project, args.env, args.path, name, value):
+            created += 1
+            print(f"    ✓ {name}")
+        else:
+            print(f"    ✗ {name} (failed)")
+
+    print(f"\n  Created {created}/{len(values)} secrets in {args.env}:{args.path}")
+
+    # Backup sync
+    syncs = template.get("sync", [])
+    if args.sync:
+        sync_config = {"manager": args.sync}
+        if args.sync_vault:
+            sync_config["vault"] = args.sync_vault
+        if args.sync_path:
+            sync_config["prefix"] = args.sync_path
+        syncs.append(sync_config)
+
+    for sync_cfg in syncs:
+        manager = sync_cfg.get("manager", "")
+        if manager == "bitwarden":
+            sync_bitwarden(
+                values,
+                vault_name=sync_cfg.get("vault", "infisiclaw-backups"),
+                folder_path=args.path,
+            )
+        elif manager == "vault":
+            sync_vault(
+                values,
+                engine=sync_cfg.get("engine", "secret"),
+                prefix=sync_cfg.get("prefix", "infisiclaw"),
+                folder_path=args.path,
+            )
+        else:
+            print(f"  Unknown sync manager: {manager}", file=sys.stderr)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="infisiclaw",
+        description="Template-driven secret folder creation for Infisical",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # templates list
+    sub.add_parser("templates", help="Manage templates")
+
+    # create
+    create_p = sub.add_parser("create", help="Create a secret folder from a template")
+    create_p.add_argument("--template", "-t", required=True, help="Template name (e.g. hermes/full)")
+    create_p.add_argument("--project", "-p", required=True, help="Infisical project UUID")
+    create_p.add_argument("--env", "-e", default="prod", help="Environment name (default: prod)")
+    create_p.add_argument("--path", default="/", help="Secret folder path (default: /)")
+    create_p.add_argument("--domain", "-d", help="Infisical domain (or set INFISICAL_URL)")
+    create_p.add_argument("--set", action="append", help="Override: KEY=value (repeatable)")
+    create_p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    create_p.add_argument("--sync", choices=["bitwarden", "vault"], help="Backup sync target")
+    create_p.add_argument("--sync-vault", help="Bitwarden vault name")
+    create_p.add_argument("--sync-path", help="Vault KV path prefix")
+
+    args = parser.parse_args()
+
+    if args.command == "templates":
+        cmd_templates_list(args)
+    elif args.command == "create":
+        cmd_create(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

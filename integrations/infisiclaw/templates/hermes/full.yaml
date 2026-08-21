@@ -1,0 +1,77 @@
+name: hermes-full
+description: "Full Hermes Agent secret set — all providers, platforms, and tools"
+version: 1
+
+extends:
+  - base/model-providers
+  - base/auth-tokens
+  - base/database
+  - base/storage
+  - base/platform-tokens
+
+secrets:
+  # --- Model & Provider ---
+  - name: DEFAULT_MODEL
+    value: "anthropic/claude-sonnet-4"
+    description: "Default LLM model for the agent"
+    group: config
+
+  - name: CONTEXT_LENGTH
+    value: "200000"
+    description: "Context window length"
+    group: config
+
+  # --- Hermes-specific auth ---
+  - name: GOOGLE_TOKEN_JSON
+    placeholder: '{"refresh_token":"...","client_id":"...","client_secret":"...","token":"..."}'
+    description: "Google OAuth token JSON — Drive, Gmail, Calendar access"
+    group: auth
+
+  - name: KITT_GMAIL_ADDRESS
+    placeholder: "user@gmail.com"
+    description: "Gmail address for email tools"
+    group: email
+
+  - name: KITT_GMAIL_PASSWORD
+    placeholder: ""
+    description: "Gmail app-specific password"
+    group: email
+
+  - name: CAMOFOX_HTTP_API_KEY
+    placeholder: ""
+    description: "CamoFox browser automation API key"
+    group: tools
+
+  - name: ELEVENLABS_API_KEY
+    placeholder: ""
+    description: "ElevenLabs TTS — premium voice synthesis"
+    group: tts
+
+  # --- Secret source bootstrap ---
+  - name: INFISICAL_MACHINE_CLIENT_ID
+    placeholder: ""
+    description: "Infisical machine identity — client ID (bootstrap token)"
+    group: infisical
+
+  - name: INFISICAL_MACHINE_CLIENT_SECRET
+    placeholder: ""
+    description: "Infisical machine identity — client secret (bootstrap)"
+    group: infisical
+
+  - name: INFISICAL_URL
+    placeholder: "https://infisical.example.com"
+    description: "Infisical instance URL"
+    group: infisical
+
+  - name: INFISICAL_PROJECT_ID
+    placeholder: ""
+    description: "Infisical project UUID"
+    group: infisical
+
+  # --- Infisical backup sync ---
+sync:
+  - manager: bitwarden
+    vault: "infisiclaw-backups"
+  - manager: vault
+    engine: "secret"
+    prefix: "infisiclaw"

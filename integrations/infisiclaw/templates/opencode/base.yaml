@@ -1,0 +1,46 @@
+name: opencode-base
+description: "OpenCode development environment — AI coding agent keys"
+version: 1
+
+extends:
+  - base/model-providers
+  - base/auth-tokens
+  - base/storage
+
+secrets:
+  # --- OpenCode-specific ---
+  - name: OPENCODE_ZEN_API_KEY
+    placeholder: ""
+    description: "OpenCode Zen API key"
+    group: model-providers
+
+  - name: OPENCODE_GO_API_KEY
+    placeholder: ""
+    description: "OpenCode Go API key (Mimo models)"
+    group: model-providers
+
+  - name: COPILOT_GITHUB_TOKEN
+    placeholder: "ghu_..."
+    description: "GitHub Copilot token"
+    group: model-providers
+
+  # --- Provider rotation (credential pools) ---
+  - name: ANTHROPIC_API_KEY_2
+    placeholder: ""
+    description: "Anthropic API key #2 — credential pool rotation"
+    group: model-providers
+
+  - name: OPENROUTER_API_KEY_2
+    placeholder: ""
+    description: "OpenRouter API key #2 — credential pool rotation"
+    group: model-providers
+
+  # --- Build & CI ---
+  - name: CI_TOKEN
+    placeholder: ""
+    description: "CI/CD platform token (GitHub Actions, etc.)"
+    group: ci
+
+sync:
+  - manager: bitwarden
+    vault: "infisiclaw-backups"

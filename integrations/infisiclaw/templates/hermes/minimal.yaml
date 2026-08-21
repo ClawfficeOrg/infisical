@@ -1,0 +1,26 @@
+name: hermes-minimal
+description: "Minimal Hermes Agent — model providers + one platform"
+version: 1
+
+extends:
+  - base/model-providers
+
+secrets:
+  - name: DEFAULT_MODEL
+    value: "anthropic/claude-sonnet-4"
+    description: "Default LLM model"
+    group: config
+
+  - name: DISCORD_BOT_TOKEN
+    prompt: "Enter your Discord bot token"
+    description: "Discord bot token — gateway messaging"
+    group: platform
+
+  - name: DISCORD_APP_ID
+    prompt: "Enter your Discord application ID"
+    description: "Discord application ID"
+    group: platform
+
+sync:
+  - manager: bitwarden
+    vault: "infisiclaw-backups"

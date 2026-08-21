@@ -1,0 +1,60 @@
+name: openclaw-base
+description: "OpenClaw development environment — API keys, auth, storage"
+version: 1
+
+extends:
+  - base/model-providers
+  - base/auth-tokens
+  - base/database
+  - base/storage
+
+secrets:
+  # --- GitHub ---
+  - name: GITHUB_CLIENT_ID
+    placeholder: ""
+    description: "GitHub OAuth app client ID"
+    group: auth
+
+  - name: GITHUB_CLIENT_SECRET
+    placeholder: ""
+    description: "GitHub OAuth app client secret"
+    group: auth
+
+  - name: GITHUB_REPO_PAT
+    placeholder: "ghp_..."
+    description: "GitHub PAT with repo scope — cloning private repos"
+    group: auth
+
+  # --- OpenClaw-specific ---
+  - name: OPENCLAW_SECRET_KEY
+    generate: random
+    description: "Signing key for OpenClaw sessions"
+    group: config
+
+  - name: OPENCLAW_DATABASE_URL
+    placeholder: "postgresql://user:pass@host:5432/openclaw"
+    description: "OpenClaw primary database"
+    group: database
+
+  - name: OPENCLAW_REDIS_URL
+    placeholder: "redis://host:6379/0"
+    description: "OpenClaw Redis — sessions, queues"
+    group: database
+
+  # --- Agent identity ---
+  - name: AGENT_NAME
+    value: "kitt"
+    description: "Agent display name"
+    group: config
+
+  - name: AGENT_HOME
+    value: "/opt/data"
+    description: "Agent home directory path"
+    group: config
+
+sync:
+  - manager: bitwarden
+    vault: "infisiclaw-backups"
+  - manager: vault
+    engine: "secret"
+    prefix: "infisiclaw"
